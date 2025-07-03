@@ -8,6 +8,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"log"
 	"net/http"
+	"reflect"
 	"restapi/internal/models"
 	"restapi/repository/sqlconnect"
 	"strconv"
@@ -55,9 +56,16 @@ func TeachersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		updateTeacherHandler(id, w, r)
 	case http.MethodDelete:
-		fmt.Println("Hello Delete Method on Teachers Route")
-		w.Write([]byte("Hello Delete Method on Teachers Route"))
-		return
+		path := strings.TrimPrefix(r.URL.Path, "/teachers/")
+		idStr := strings.TrimSuffix(path, "/")
+		id, err := strconv.Atoi(idStr)
+
+		if err != nil {
+			log.Println("Invalid ID")
+			http.Error(w, "Invalid ID", http.StatusBadRequest)
+			return
+		}
+		deleteTeacherHandler(id, w, r)
 
 	}
 
@@ -228,20 +236,36 @@ func updateTeacherHandler(id int, w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println(err)
 		http.Error(w, "Error querying data", http.StatusInternalServerError)
+		return
 	}
 
+	//for k, v := range updates {
+	//	switch k {
+	//	case "first_name":
+	//		existingTeacher.FirstName = v.(string)
+	//	case "last_name":
+	//		existingTeacher.LastName = v.(string)
+	//	case "email":
+	//		existingTeacher.Email = v.(string)
+	//	case "class":
+	//		existingTeacher.Class = v.(string)
+	//	case "subject":
+	//		existingTeacher.Subject = v.(string)
+	//	}
+	//}
+
+	teacherVal := reflect.ValueOf(&existingTeacher).Elem()
+	teacherType := teacherVal.Type()
+
 	for k, v := range updates {
-		switch k {
-		case "first_name":
-			existingTeacher.FirstName = v.(string)
-		case "last_name":
-			existingTeacher.LastName = v.(string)
-		case "email":
-			existingTeacher.Email = v.(string)
-		case "class":
-			existingTeacher.Class = v.(string)
-		case "subject":
-			existingTeacher.Subject = v.(string)
+		for i := 0; i < teacherVal.NumField(); i++ {
+			field := teacherType.Field(i)
+			if field.Tag.Get("json") == fmt.Sprintf("%s,omitempty", k) {
+				if teacherVal.Field(i).CanSet() {
+					fieldValue := teacherVal.Field(i)
+					fieldValue.Set(reflect.ValueOf(v).Convert(teacherVal.Field(i).Type()))
+				}
+			}
 		}
 	}
 
@@ -255,6 +279,43 @@ func updateTeacherHandler(id int, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(existingTeacher)
 
+}
+
+func deleteTeacherHandler(id int, w http.ResponseWriter, r *http.Request) {
+	db, err := sqlconnect.ConnectDB()
+	if err != nil {
+		log.Println(err)
+		http.Error(w, "Error connecting database", http.StatusInternalServerError)
+		return
+	}
+	defer db.Close()
+
+	result, err := db.Exec("DELETE FROM teachers WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, "Erro deleting teacher", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		http.Error(w, "Error retrieving delete result", http.StatusInternalServerError)
+		return
+	}
+
+	if rowsAffected == 0 {
+		http.Error(w, "Teacher not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	response := struct {
+		Status string `json:"status"`
+		ID     int    `json:"id"`
+	}{
+		Status: "success",
+		ID:     id,
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 func addFilters(r *http.Request, query string, args []any) (string, []any) {
